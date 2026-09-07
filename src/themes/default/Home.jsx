@@ -4,10 +4,8 @@ import { useTranslation } from 'react-i18next';
 import {
   Activity,
   ArrowRight,
-  CheckCircle2,
   Cpu,
   Gauge,
-  KeyRound,
   ShieldCheck,
   WalletCards,
 } from 'lucide-react';
@@ -15,8 +13,8 @@ import { useAuth } from '../../context/AuthContext';
 import { useSite, useCurrency } from '../../context/SiteContext';
 import { getSiteModels, getSitePackages, Q } from '../../api';
 import { calcOfficialEquivList } from '../../utils/officialEquiv';
+import { PUBLIC_API_ENDPOINT_COUNT } from '../../constants/apiEndpoints';
 import RotatingEquiv from '../../components/bits/RotatingEquiv';
-import CountUp from '../../components/bits/CountUp';
 import FadeContent from '../../components/bits/FadeContent';
 import ApiEndpoints from '../../components/ApiEndpoints';
 import { getHomeContent } from '../../utils/siteContent';
@@ -37,7 +35,6 @@ export default function DefaultHome() {
 
   const enabledModels = useMemo(() => models.filter(m => m.enabled !== false), [models]);
   const visiblePackages = useMemo(() => packages.filter(p => p.enabled), [packages]);
-  const modelPreview = enabledModels.slice(0, 6);
   const homeContent = getHomeContent(site, t);
 
   const features = [
@@ -67,17 +64,17 @@ export default function DefaultHome() {
         <div className="absolute inset-0 pointer-events-none opacity-[0.55] [background-image:linear-gradient(#e5e7eb_1px,transparent_1px),linear-gradient(90deg,#e5e7eb_1px,transparent_1px)] [background-size:44px_44px]" />
 
         <div className="relative mx-auto grid max-w-7xl gap-12 px-4 pb-16 pt-16 sm:px-6 lg:grid-cols-[1.02fr_0.98fr] lg:items-center lg:pb-20 lg:pt-20">
-          <FadeContent blur duration={700} delay={80}>
-            <div className="max-w-2xl">
-              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 shadow-sm">
+          <FadeContent blur duration={700} delay={80} className="min-w-0">
+            <div className="min-w-0 max-w-2xl">
+              <div className="mb-5 inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 shadow-sm">
                 <Activity className="h-4 w-4 text-emerald-600" />
-                {homeContent.heroTagline}
+                <span className="min-w-0 break-words">{homeContent.heroTagline}</span>
               </div>
 
-              <h1 className="text-4xl font-black tracking-tight text-slate-950 sm:text-5xl lg:text-6xl">
+              <h1 className="break-words text-4xl font-black tracking-tight text-slate-950 sm:text-5xl lg:text-6xl">
                 {site?.name || t('home.defaultHeroTitle')}
               </h1>
-              <p className="mt-6 max-w-xl text-base leading-8 text-slate-600 sm:text-lg">
+              <p className="mt-6 max-w-xl break-words text-base leading-8 text-slate-600 sm:text-lg">
                 {homeContent.heroSubtitle}
               </p>
 
@@ -109,25 +106,25 @@ export default function DefaultHome() {
                 )}
               </div>
 
-              <div className="mt-10 grid max-w-xl grid-cols-3 gap-3">
-                <Metric value={enabledModels.length || 50} suffix="+" label={t('home.aiModels')} />
-                <Metric value={99.9} suffix="%" label={t('home.uptime')} />
-                <Metric value={50} prefix="<" suffix="ms" label={t('home.latency')} />
+              <div className="mt-10 flex max-w-xl flex-wrap gap-x-7 gap-y-3 border-t border-slate-200 pt-5">
+                <HeroFact value={enabledModels.length} label={t('home.aiModels')} />
+                <HeroFact value={visiblePackages.length} label={t('home.plansPackages')} />
+                <HeroFact value={PUBLIC_API_ENDPOINT_COUNT} label={t('home.apiEndpointsTitle')} />
               </div>
             </div>
           </FadeContent>
 
-          <FadeContent blur duration={700} delay={220}>
+          <FadeContent blur duration={700} delay={220} className="min-w-0">
             {homeContent.heroImage ? (
               <HomeHeroImage src={homeContent.heroImage} alt={site?.name} className="aspect-[4/3]" />
             ) : (
-              <HeroConsole models={modelPreview} t={t} />
+              <ModelDirectory models={enabledModels} t={t} />
             )}
           </FadeContent>
         </div>
       </section>
 
-      <ApiEndpoints />
+      <ApiEndpoints variant="default" />
 
       <section className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:py-20">
         <FadeContent blur duration={700} delay={80}>
@@ -294,67 +291,45 @@ export default function DefaultHome() {
   );
 }
 
-function Metric({ value, label, prefix = '', suffix = '' }) {
+function HeroFact({ value, label }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white/90 p-4 shadow-sm">
-      <div className="text-xl font-black tracking-tight text-slate-950">
-        {prefix}<CountUp from={0} to={value} duration={2} />{suffix}
-      </div>
-      <p className="mt-1 truncate text-xs font-medium text-slate-500">{label}</p>
+    <div className="flex items-baseline gap-2">
+      <span className="text-lg font-black text-slate-950">{value}</span>
+      <span className="text-xs font-medium text-slate-500">{label}</span>
     </div>
   );
 }
 
-function HeroConsole({ models, t }) {
-  const rows = models.length > 0 ? models : [
-    { display_name: 'gpt-4o-mini' },
-    { display_name: 'claude-3.5-sonnet' },
-    { display_name: 'gemini-1.5-pro' },
-  ];
+function ModelDirectory({ models, t }) {
+  const rows = models.slice(0, 6);
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl shadow-slate-200/80">
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-950">
-        <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-          <div className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full bg-red-400" />
-            <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
-            <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
-          </div>
-          <span className="font-mono text-xs text-slate-400">/v1/chat/completions</span>
+    <div className="mx-auto w-full max-w-xl border-y border-slate-300 bg-white/70 py-6 backdrop-blur-sm">
+      <div className="flex items-start justify-between gap-5 px-1">
+        <div>
+          <p className="text-lg font-black text-slate-950">{t('home.availableModels')}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">
+            {t('home.availableModelsDesc', { count: models.length })}
+          </p>
         </div>
-
-        <div className="grid gap-0 lg:grid-cols-[1fr_0.86fr]">
-          <div className="border-b border-white/10 p-5 lg:border-b-0 lg:border-r">
-            <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
-              <KeyRound className="h-4 w-4 text-emerald-400" />
-              {t('nav.apiKeys')}
-            </div>
-            <pre className="overflow-hidden rounded-lg bg-black/40 p-4 text-xs leading-6 text-slate-300">
-{`curl https://api.example.com/v1/chat/completions
-  -H "Authorization: Bearer sk-..."
-  -d '{"model":"${rows[0]?.display_name || rows[0]?.model_name}"}'`}
-            </pre>
-          </div>
-
-          <div className="p-5">
-            <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
-              <CheckCircle2 className="h-4 w-4 text-indigo-300" />
-              {t('home.availableModels')}
-            </div>
-            <div className="space-y-2">
-              {rows.slice(0, 4).map((model, index) => (
-                <div key={model.id || model.model_name || model.display_name || index} className="flex items-center justify-between rounded-lg bg-white/[0.06] px-3 py-2">
-                  <span className="min-w-0 truncate font-mono text-xs text-slate-200">
-                    {model.display_name || model.model_name}
-                  </span>
-                  <span className="ml-3 rounded-full bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">OK</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        <Cpu className="mt-1 h-5 w-5 shrink-0 text-indigo-700" />
       </div>
+
+      <div className="mt-6 grid gap-x-6 sm:grid-cols-2">
+        {rows.map((model, index) => (
+          <div key={model.id || model.model_name || index} className="flex min-w-0 items-center gap-3 border-t border-slate-200 py-3">
+            <span className="w-5 shrink-0 font-mono text-xs text-slate-400">{String(index + 1).padStart(2, '0')}</span>
+            <span className="min-w-0 truncate font-mono text-sm font-semibold text-slate-800">
+              {model.display_name || model.model_name}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <Link to="/pricing" className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-indigo-700 hover:text-indigo-900">
+        {t('home.viewAllModels', { count: models.length })}
+        <ArrowRight className="h-4 w-4" />
+      </Link>
     </div>
   );
 }

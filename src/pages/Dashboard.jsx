@@ -8,18 +8,22 @@ import {
   getAffCode,
   transferAffQuota,
   getAffEarnings,
+  getAffPayouts,
   requestAffWithdraw,
+  verifyDist2FA,
   getDistKolStatus,
   submitDistKolApply,
   Q,
 } from '../api';
 import { useCurrency, useSite } from '../context/SiteContext';
 import CountUp from '../components/bits/CountUp';
+import SecurityVerificationModal from '../components/SecurityVerificationModal';
 import toast from 'react-hot-toast';
+import { Award, ChevronDown } from 'lucide-react';
 
 export default function Dashboard() {
   const { t } = useTranslation();
-  const { user, refreshUser } = useAuth();
+  const { user, refreshUser, updateUser } = useAuth();
   const { symbol, rate } = useCurrency();
   const { site } = useSite();
   const [usage, setUsage] = useState(null);
@@ -29,8 +33,12 @@ export default function Dashboard() {
   // Invitation / Aff
   const [affLink, setAffLink] = useState('');
   const [affEarnings, setAffEarnings] = useState([]);
+  const [affPayouts, setAffPayouts] = useState([]);
+  const [affDetailTab, setAffDetailTab] = useState('earnings');
   const [showAffEarnings, setShowAffEarnings] = useState(false);
+  const [showInviteMilestones, setShowInviteMilestones] = useState(false);
   const [affEarningsLoading, setAffEarningsLoading] = useState(false);
+  const [affPayoutsLoading, setAffPayoutsLoading] = useState(false);
   const [transferAmount, setTransferAmount] = useState('');
   const [transferring, setTransferring] = useState(false);
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
@@ -38,6 +46,9 @@ export default function Dashboard() {
   const [withdrawMethod, setWithdrawMethod] = useState('');
   const [withdrawRemark, setWithdrawRemark] = useState('');
   const [withdrawing, setWithdrawing] = useState(false);
+  const [pendingWithdraw, setPendingWithdraw] = useState(null);
+  const [showSecurityVerification, setShowSecurityVerification] = useState(false);
+  const [securityVerificationLoading, setSecurityVerificationLoading] = useState(false);
   const [distKolStatus, setDistKolStatus] = useState(null);
   const [showKolApplyModal, setShowKolApplyModal] = useState(false);
   const [kolApplyLoading, setKolApplyLoading] = useState(false);
@@ -99,18 +110,101 @@ export default function Dashboard() {
     setAffEarningsLoading(false);
   };
 
+  const loadAffPayouts = async () => {
+    setAffPayoutsLoading(true);
+    try {
+      const res = await getAffPayouts({ page: 1, page_size: 20 });
+      if (res.data.success && res.data.data) {
+        setAffPayouts(res.data.data);
+      }
+    } catch (e) {
+      /* interceptor */
+    }
+    setAffPayoutsLoading(false);
+  };
+
+  const handleToggleAffDetails = () => {
+    const nextShow = !showAffEarnings;
+    setShowAffEarnings(nextShow);
+    if (!nextShow) return;
+    if (affDetailTab === 'payouts') {
+      loadAffPayouts();
+    } else {
+      loadAffEarnings();
+    }
+  };
+
+  const handleAffDetailTabChange = (tab) => {
+    setAffDetailTab(tab);
+    if (tab === 'payouts') {
+      loadAffPayouts();
+    } else {
+      loadAffEarnings();
+    }
+  };
+
   const handleCopyAffLink = () => {
     if (!affLink) return;
     navigator.clipboard.writeText(affLink).then(() => {
       toast.success(t('topup.copied'));
     }).catch(() => {
-      toast.error('Copy failed');
+      toast.error(t('officialChannels.copyFailed'));
     });
   };
 
+  const getAffEarningUsername = (item) => item.username || item.display_name || (item.user_id ? `ID ${item.user_id}` : '-');
+
+  const formatTime = (timestamp) => {
+    if (!timestamp) return '-';
+    return new Date(timestamp * 1000).toLocaleString();
+  };
+
+  const formatPayoutAmount = (item) => {
+    const money = Number(item?.money ?? 0);
+    const amount = Number(item?.amount ?? 0);
+    const usdAmount = money > 0 ? money : amount;
+    return `${symbol}${(usdAmount * rate).toFixed(2)}`;
+  };
+
+  const getPayoutStatusMeta = (status) => {
+    if (status === 0) {
+      return {
+        label: t('topup.withdrawStatusPending'),
+        className: 'border-amber-500/20 bg-amber-500/10 text-amber-600',
+      };
+    }
+    if (status === 1) {
+      return {
+        label: t('topup.withdrawStatusProcessing'),
+        className: 'border-sky-500/20 bg-sky-500/10 text-sky-600',
+      };
+    }
+    if (status === 2) {
+      return {
+        label: t('topup.withdrawStatusCompleted'),
+        className: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600',
+      };
+    }
+    if (status === 3) {
+      return {
+        label: t('topup.withdrawStatusFailed'),
+        className: 'border-red-500/20 bg-red-500/10 text-red-600',
+      };
+    }
+    return {
+      label: '-',
+      className: 'border-page-border bg-page-surface-hover text-page-secondary',
+    };
+  };
+
   const handleTransfer = async () => {
-    const val = parseInt(transferAmount);
-    if (!val || val <= 0) {
+    const amount = Number.parseFloat(transferAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error(t('topup.enterAmount'));
+      return;
+    }
+    const val = Math.round((amount / rate) * Q);
+    if (val <= 0) {
       toast.error(t('topup.enterAmount'));
       return;
     }
@@ -118,6 +212,11 @@ export default function Dashboard() {
     try {
       const res = await transferAffQuota({ quota: val });
       if (res.data.success) {
+        const updated = res.data.data;
+        if (updated) {
+          updateUser(updated);
+          setUsage((prev) => (prev ? { ...prev, quota: updated.quota } : prev));
+        }
         toast.success(res.data.message || t('topup.transferSuccess'));
         setTransferAmount('');
         await Promise.all([loadData(), refreshUser()]);
@@ -126,6 +225,12 @@ export default function Dashboard() {
       /* interceptor */
     }
     setTransferring(false);
+  };
+
+  const handleTransferAll = () => {
+    if (availableAffAmount > 0) {
+      setTransferAmount(availableAffAmount.toFixed(2));
+    }
   };
 
   const resetWithdrawForm = () => {
@@ -165,6 +270,7 @@ export default function Dashboard() {
 
   const quota = usage?.quota ?? user?.quota ?? 0;
   const usedQuota = usage?.used_quota ?? user?.used_quota ?? 0;
+  const packageUsedQuota = usage?.package_used_quota ?? user?.package_used_quota ?? 0;
   const requestCount = usage?.request_count ?? user?.request_count ?? 0;
   const balanceDollars = (quota / Q) * rate;
   const availableAffAmount = ((user?.aff_quota || 0) / Q) * rate;
@@ -174,6 +280,65 @@ export default function Dashboard() {
   );
   const hasCustomCommissionRate =
     currentCommissionRate > defaultCommissionRate + 1e-8;
+  let inheritedMilestoneRate = defaultCommissionRate;
+  const inviteMilestoneRules = (Array.isArray(user?.invite_milestone_rules) ? user.invite_milestone_rules : [])
+    .map((rule) => {
+      const configuredRate = Number(rule?.commission_rate);
+      if (rule?.commission_rate !== null && rule?.commission_rate !== undefined && Number.isFinite(configuredRate)) {
+        inheritedMilestoneRate = configuredRate;
+      }
+      return {
+        ...rule,
+        invite_count: Number(rule?.invite_count || 0),
+        reward_amount: Number(rule?.reward_amount || 0),
+        effective_commission_rate: inheritedMilestoneRate,
+      };
+    })
+    .filter((rule) => rule.invite_count > 0 && Number.isFinite(rule.reward_amount) && rule.reward_amount > 0);
+  const currentInviteCount = Number(user?.aff_count || 0);
+  const nextInviteMilestone = inviteMilestoneRules.find((rule) => rule.invite_count > currentInviteCount);
+  const claimedInviteMilestones = inviteMilestoneRules.filter((rule) => rule.claimed).length;
+  const showInviteMilestoneActivity = user?.invite_milestone_enabled && inviteMilestoneRules.length > 0;
+
+  const formatMilestoneReward = (amount) =>
+    `${amount.toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 6,
+    })}`;
+
+  const formatMilestoneRate = (commissionRate) =>
+    `${(commissionRate * 100).toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    })}%`;
+
+  const submitWithdrawRequest = async (data) => {
+    setWithdrawing(true);
+    try {
+      const res = await requestAffWithdraw(data, { skipErrorHandler: true });
+      if (!res.data?.success) {
+        throw new Error(res.data?.message || t('common.requestFailed'));
+      }
+      toast.success(res.data.message || t('topup.withdrawSuccess'));
+      setShowWithdrawModal(false);
+      resetWithdrawForm();
+      await Promise.all([loadData(), refreshUser(), loadAffPayouts()]);
+      setAffDetailTab('payouts');
+      setShowAffEarnings(true);
+      return true;
+    } catch (error) {
+      const verificationCodes = ['VERIFICATION_REQUIRED', 'VERIFICATION_EXPIRED', 'VERIFICATION_INVALID'];
+      if (error.response?.status === 403 && verificationCodes.includes(error.response?.data?.code)) {
+        setPendingWithdraw(data);
+        setShowSecurityVerification(true);
+        return false;
+      }
+      toast.error(error.response?.data?.message || error.message || t('common.requestFailed'));
+      return false;
+    } finally {
+      setWithdrawing(false);
+    }
+  };
 
   const handleWithdraw = async () => {
     const amount = Number.parseFloat(withdrawAmount);
@@ -190,23 +355,43 @@ export default function Dashboard() {
       return;
     }
 
-    setWithdrawing(true);
+    await submitWithdrawRequest({
+      amount: amount / rate,
+      payment_method: withdrawMethod.trim(),
+      remark: withdrawRemark.trim(),
+    });
+  };
+
+  const handleSecurityVerification = async (code) => {
+    if (!pendingWithdraw) return;
+    setSecurityVerificationLoading(true);
     try {
-      const res = await requestAffWithdraw({
-        amount: amount / rate,
-        payment_method: withdrawMethod.trim(),
-        remark: withdrawRemark.trim(),
-      });
-      if (res.data.success) {
-        toast.success(res.data.message || t('topup.withdrawSuccess'));
-        setShowWithdrawModal(false);
-        resetWithdrawForm();
-        await Promise.all([loadData(), refreshUser()]);
+      const res = await verifyDist2FA(code, { skipErrorHandler: true });
+      if (!res.data?.success) {
+        throw new Error(res.data?.message || t('security.verificationFailed'));
       }
-    } catch (err) {
-      /* interceptor */
+      const withdrawData = pendingWithdraw;
+      setPendingWithdraw(null);
+      setShowSecurityVerification(false);
+      await submitWithdrawRequest(withdrawData);
+    } catch (error) {
+      toast.error(error.response?.data?.message || error.message || t('security.verificationFailed'));
+    } finally {
+      setSecurityVerificationLoading(false);
     }
-    setWithdrawing(false);
+  };
+
+  const closeSecurityVerification = () => {
+    if (securityVerificationLoading) return;
+    setPendingWithdraw(null);
+    setShowSecurityVerification(false);
+  };
+
+  const openSecuritySettings = () => {
+    setPendingWithdraw(null);
+    setShowSecurityVerification(false);
+    setShowWithdrawModal(false);
+    window.location.assign('/account#security');
   };
 
   const handleKolApply = async () => {
@@ -311,12 +496,12 @@ export default function Dashboard() {
         <p className="text-sm text-page-secondary">{t('dashboard.manageDesc')}</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6 mb-10">
         <div className="glass rounded-2xl p-6">
           <p className="text-sm text-page-secondary mb-2">{t('dashboard.balance')}</p>
           <div className="text-3xl font-bold text-page">
             {symbol}
-            <CountUp from={0} to={Math.round(balanceDollars * 100) / 100} duration={1.5} />
+            <CountUp from={0} to={balanceDollars} duration={1.5} decimals={2} />
           </div>
           <p className="text-xs text-page-muted mt-1">{t('dashboard.quotaUnits', { count: quota.toLocaleString() })}</p>
         </div>
@@ -325,9 +510,18 @@ export default function Dashboard() {
           <p className="text-sm text-page-secondary mb-2">{t('dashboard.used')}</p>
           <div className="text-3xl font-bold text-page">
             {symbol}
-            <CountUp from={0} to={Math.round((usedQuota / Q) * rate * 100) / 100} duration={1.5} />
+            <CountUp from={0} to={(usedQuota / Q) * rate} duration={1.5} decimals={2} />
           </div>
           <p className="text-xs text-page-muted mt-1">{t('dashboard.quotaUnits', { count: usedQuota.toLocaleString() })}</p>
+        </div>
+
+        <div className="glass rounded-2xl p-6">
+          <p className="text-sm text-page-secondary mb-2">{t('dashboard.packageUsed')}</p>
+          <div className="text-3xl font-bold text-page">
+            {symbol}
+            <CountUp from={0} to={(packageUsedQuota / Q) * rate} duration={1.5} decimals={2} />
+          </div>
+          <p className="text-xs text-page-muted mt-1">{t('dashboard.quotaUnits', { count: packageUsedQuota.toLocaleString() })}</p>
         </div>
 
         <div className="glass rounded-2xl p-6">
@@ -378,6 +572,16 @@ export default function Dashboard() {
               <p className="text-sm font-medium text-page group-hover:text-page-link transition-colors">{t('dashboard.logs')}</p>
               <p className="text-xs text-page-muted">{t('dashboard.viewLogs')}</p>
             </Link>
+            <Link to="/account" className="glass-sm !rounded-xl px-4 py-3 hover:bg-page-surface-hover transition-colors group">
+              <p className="text-sm font-medium text-page group-hover:text-page-link transition-colors">{t('dashboard.account')}</p>
+              <p className="text-xs text-page-muted">{t('dashboard.accountDesc')}</p>
+            </Link>
+            {site?.enable_invoice && (
+              <Link to="/account#invoice" className="glass-sm !rounded-xl px-4 py-3 hover:bg-page-surface-hover transition-colors group">
+                <p className="text-sm font-medium text-page group-hover:text-page-link transition-colors">{t('dashboard.invoice')}</p>
+                <p className="text-xs text-page-muted">{t('dashboard.invoiceDesc')}</p>
+              </Link>
+            )}
             {site?.allow_sub_dist && (
               <Link to="/sub-site" className="glass-sm !rounded-xl px-4 py-3 hover:bg-page-surface-hover transition-colors group">
                 <p className="text-sm font-medium text-page group-hover:text-page-link transition-colors">{t('subDist.nav')}</p>
@@ -430,6 +634,99 @@ export default function Dashboard() {
             </div>
           </div>
 
+          {showInviteMilestoneActivity && (
+            <div className="mb-5 border-y border-page-border">
+              <button
+                type="button"
+                className="flex w-full items-center gap-3 py-3 text-left"
+                onClick={() => setShowInviteMilestones((visible) => !visible)}
+                aria-expanded={showInviteMilestones}
+              >
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-500/10 text-page-link">
+                  <Award className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium text-page">{t('topup.milestoneTitle')}</span>
+                  <span className="block truncate text-xs text-page-muted">
+                    {nextInviteMilestone
+                      ? t('topup.milestoneNext', {
+                          current: currentInviteCount,
+                          remaining: nextInviteMilestone.invite_count - currentInviteCount,
+                        })
+                      : t('topup.milestoneComplete')}
+                  </span>
+                </span>
+                <span className="hidden shrink-0 text-xs text-page-secondary sm:block">
+                  {t('topup.milestoneClaimedSummary', {
+                    claimed: claimedInviteMilestones,
+                    total: inviteMilestoneRules.length,
+                  })}
+                </span>
+                <ChevronDown className={`h-4 w-4 shrink-0 text-page-muted transition-transform ${showInviteMilestones ? 'rotate-180' : ''}`} aria-hidden="true" />
+              </button>
+
+              {showInviteMilestones && (
+                <div className="border-t border-page-border pb-3 pt-3">
+                  <p className="mb-3 text-xs leading-5 text-page-muted">{t('topup.milestoneDescription')}</p>
+                  <div className="hidden grid-cols-[1.1fr_1fr_1fr_6rem] gap-3 border-b border-page-border px-2 pb-2 text-xs text-page-muted sm:grid">
+                    <span>{t('topup.milestoneInviteCount')}</span>
+                    <span>{t('topup.milestoneReward')}</span>
+                    <span>{t('topup.milestoneCommission')}</span>
+                    <span className="text-right">{t('topup.milestoneStatus')}</span>
+                  </div>
+                  <div className="divide-y divide-page-border">
+                    {inviteMilestoneRules.map((rule) => {
+                      const isReached = currentInviteCount >= rule.invite_count;
+                      const isNext = nextInviteMilestone?.invite_count === rule.invite_count;
+                      const status = rule.claimed ? 'claimed' : isReached ? 'reached' : isNext ? 'progress' : 'locked';
+                      const statusMeta = {
+                        claimed: {
+                          label: t('topup.milestoneClaimed'),
+                          className: 'bg-emerald-500/10 text-page-success',
+                        },
+                        reached: {
+                          label: t('topup.milestoneReached'),
+                          className: 'bg-amber-500/10 text-page-warning',
+                        },
+                        progress: {
+                          label: t('topup.milestoneInProgress'),
+                          className: 'bg-brand-500/10 text-page-link',
+                        },
+                        locked: {
+                          label: t('topup.milestoneLocked'),
+                          className: 'bg-page-surface-hover text-page-muted',
+                        },
+                      }[status];
+
+                      return (
+                        <div key={rule.invite_count} className="grid grid-cols-2 gap-x-3 gap-y-2 px-2 py-3 text-sm sm:grid-cols-[1.1fr_1fr_1fr_6rem] sm:items-center">
+                          <span className="font-medium text-page">
+                            <span className="mr-1 text-xs text-page-muted sm:hidden">{t('topup.milestoneInviteCount')}</span>
+                            {t('topup.milestonePeople', {
+                              count: rule.invite_count,
+                            })}
+                          </span>
+                          <span className="text-page-secondary">
+                            <span className="mr-1 text-xs text-page-muted sm:hidden">{t('topup.milestoneReward')}</span>
+                            {formatMilestoneReward(rule.reward_amount)}
+                          </span>
+                          <span className="text-page-secondary">
+                            <span className="mr-1 text-xs text-page-muted sm:hidden">{t('topup.milestoneCommission')}</span>
+                            {formatMilestoneRate(rule.effective_commission_rate)}
+                          </span>
+                          <span className="justify-self-start sm:justify-self-end">
+                            <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${statusMeta.className}`}>{statusMeta.label}</span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 px-2 text-xs text-page-muted">{t('topup.milestonePriorityNote')}</p>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="mb-5">
             <label className="block text-sm font-medium text-page-label mb-2">{t('topup.inviteLink')}</label>
             <div className="flex gap-2">
@@ -455,8 +752,16 @@ export default function Dashboard() {
                   onChange={(e) => setTransferAmount(e.target.value)}
                   placeholder={t('topup.transferPlaceholder')}
                   className="input flex-1 text-sm"
-                  min={1}
+                  min={0}
                 />
+                <button
+                  type="button"
+                  onClick={handleTransferAll}
+                  disabled={transferring || (user?.aff_quota || 0) <= 0}
+                  className="btn-secondary whitespace-nowrap text-sm px-4"
+                >
+                  {t('topup.transferAll')}
+                </button>
                 <button onClick={handleTransfer} disabled={transferring} className="btn-primary whitespace-nowrap text-sm px-4">
                   {transferring ? t('topup.processing') : t('topup.transfer')}
                 </button>
@@ -466,37 +771,116 @@ export default function Dashboard() {
 
           <div>
             <button
-              onClick={() => {
-                setShowAffEarnings(!showAffEarnings);
-                if (!showAffEarnings) loadAffEarnings();
-              }}
+              onClick={handleToggleAffDetails}
               className="text-sm text-page-secondary hover:text-page transition-colors"
             >
-              {showAffEarnings ? t('topup.hideEarnings') : t('topup.viewEarnings')}
+              {showAffEarnings ? t('topup.hideEarnings') : t('topup.viewRewardDetails')}
             </button>
             {showAffEarnings && (
               <div className="mt-3">
-                {affEarningsLoading ? (
+                <div className="mb-3 flex overflow-hidden rounded-xl border border-page-border">
+                  <button
+                    type="button"
+                    onClick={() => handleAffDetailTabChange('earnings')}
+                    className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                      affDetailTab === 'earnings'
+                        ? 'bg-page-surface-hover text-page'
+                        : 'text-page-secondary hover:text-page'
+                    }`}
+                  >
+                    {t('topup.earningDetails')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAffDetailTabChange('payouts')}
+                    className={`flex-1 border-l border-page-border px-4 py-2 text-sm font-medium transition-colors ${
+                      affDetailTab === 'payouts'
+                        ? 'bg-page-surface-hover text-page'
+                        : 'text-page-secondary hover:text-page'
+                    }`}
+                  >
+                    {t('topup.withdrawHistory')}
+                  </button>
+                </div>
+
+                {affDetailTab === 'earnings' && affEarningsLoading ? (
                   <div className="flex justify-center py-6">
                     <div className="w-6 h-6 border-2 border-brand-500/30 border-t-brand-500 rounded-full animate-spin" />
                   </div>
-                ) : affEarnings.length === 0 ? (
+                ) : affDetailTab === 'earnings' && affEarnings.length === 0 ? (
                   <p className="text-sm text-page-muted text-center py-6">{t('topup.noEarnings')}</p>
-                ) : (
+                ) : affDetailTab === 'earnings' ? (
                   <div className="space-y-2">
                     {affEarnings.map((item, i) => (
                       <div key={i} className="flex items-center justify-between glass-sm rounded-xl px-4 py-3">
-                        <div>
-                          <p className="text-sm text-page">{item.model_name}</p>
-                          <p className="text-xs text-page-muted">
-                            {new Date(item.created_time * 1000).toLocaleString()} · {(item.commission_rate * 100).toFixed(1)}%
+                        <div className="min-w-0">
+                          <p className="truncate text-sm text-page">{getAffEarningUsername(item)}</p>
+                          <p className="truncate text-xs text-page-muted">
+                            {item.model_name || '-'} · {formatTime(item.created_time)} · {(item.commission_rate * 100).toFixed(1)}%
                           </p>
                         </div>
-                        <span className="text-sm font-medium text-page-success">
+                        <span className="shrink-0 text-sm font-medium text-page-success">
                           +{symbol}{((item.commission_quota / Q) * rate).toFixed(4)}
                         </span>
                       </div>
                     ))}
+                  </div>
+                ) : affPayoutsLoading ? (
+                  <div className="flex justify-center py-6">
+                    <div className="w-6 h-6 border-2 border-brand-500/30 border-t-brand-500 rounded-full animate-spin" />
+                  </div>
+                ) : affPayouts.length === 0 ? (
+                  <p className="text-sm text-page-muted text-center py-6">{t('topup.noWithdrawHistory')}</p>
+                ) : (
+                  <div className="space-y-2">
+                    {affPayouts.map((item) => {
+                      const statusMeta = getPayoutStatusMeta(item.status);
+                      return (
+                        <div key={item.id} className="glass-sm rounded-xl px-4 py-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-page">
+                                {formatPayoutAmount(item)}
+                              </p>
+                              <p className="mt-1 truncate text-xs text-page-muted">
+                                {formatTime(item.created_time)} · {item.payment_method || '-'}
+                              </p>
+                            </div>
+                            <span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium ${statusMeta.className}`}>
+                              {statusMeta.label}
+                            </span>
+                          </div>
+                          {(item.remark || item.admin_remark || item.transaction_id || item.completed_time) && (
+                            <div className="mt-3 space-y-1 border-t border-page-border pt-3 text-xs text-page-muted">
+                              {item.remark && (
+                                <p>
+                                  <span className="text-page-secondary">{t('topup.withdrawRemarkLabel')}</span>
+                                  {item.remark}
+                                </p>
+                              )}
+                              {item.admin_remark && (
+                                <p>
+                                  <span className="text-page-secondary">{t('topup.withdrawAdminRemark')}</span>
+                                  {item.admin_remark}
+                                </p>
+                              )}
+                              {item.transaction_id && (
+                                <p className="break-all">
+                                  <span className="text-page-secondary">{t('topup.withdrawTransactionId')}</span>
+                                  {item.transaction_id}
+                                </p>
+                              )}
+                              {item.completed_time > 0 && (
+                                <p>
+                                  <span className="text-page-secondary">{t('topup.withdrawCompletedTime')}</span>
+                                  {formatTime(item.completed_time)}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -507,10 +891,10 @@ export default function Dashboard() {
 
       {showWithdrawModal && (
         <div
-          className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          className="modal-overlay fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
           onClick={handleCloseWithdraw}
         >
-          <div className="glass w-full max-w-md rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="glass max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
             <div className="mb-5">
               <h3 className="text-lg font-semibold text-page mb-1">{t('topup.withdrawTitle')}</h3>
               <p className="text-sm text-page-secondary">{t('topup.withdrawSubtitle')}</p>
@@ -584,12 +968,20 @@ export default function Dashboard() {
         </div>
       )}
 
+      <SecurityVerificationModal
+        open={showSecurityVerification}
+        loading={securityVerificationLoading}
+        onClose={closeSecurityVerification}
+        onVerify={handleSecurityVerification}
+        onOpenSettings={openSecuritySettings}
+      />
+
       {showKolApplyModal && (
         <div
-          className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          className="modal-overlay fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
           onClick={handleCloseKolApply}
         >
-          <div className="glass w-full max-w-md rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="glass max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
             <div className="mb-5">
               <h3 className="text-lg font-semibold text-page mb-1">{t('topup.kolApplyModalTitle')}</h3>
               <p className="text-sm text-page-secondary">{t('topup.kolApplyModalDesc')}</p>

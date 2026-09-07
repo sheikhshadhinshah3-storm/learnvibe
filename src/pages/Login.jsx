@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
 import { useSite } from '../context/SiteContext';
+import { LegalAgreementCheckbox } from '../components/LegalLinks';
+import OAuthLoginButtons from '../components/OAuthLoginButtons';
 import toast from 'react-hot-toast';
 
 export default function Login() {
@@ -13,6 +15,21 @@ export default function Login() {
   const location = useLocation();
   const [form, setForm] = useState({ username: '', password: '' });
   const [loading, setLoading] = useState(false);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const oauthError = params.get('oauth_error');
+    if (!oauthError) return;
+    toast.error(oauthError);
+    params.delete('oauth_error');
+    const nextQuery = params.toString();
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${location.pathname}${nextQuery ? `?${nextQuery}` : ''}`,
+    );
+  }, [location.pathname, location.search]);
 
   // If already logged in, redirect via component (not navigate in render)
   if (user) {
@@ -24,6 +41,10 @@ export default function Login() {
     e.preventDefault();
     if (!form.username || !form.password) {
       toast.error(t('login.fillAllFields'));
+      return;
+    }
+    if (!agreedToTerms) {
+      toast.error(t('legal.agreeRequired'));
       return;
     }
     setLoading(true);
@@ -43,12 +64,13 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-[70vh] flex items-center justify-center px-6">
+    <div className="auth-page-shell flex min-h-[70vh] items-center justify-center px-4 py-10 sm:px-6">
       <div className="w-full max-w-md">
-        <div className="glass rounded-2xl p-8">
-          <div className="text-center mb-8">
-            <h1 className="text-2xl font-heading font-bold text-page mb-2">{t('login.welcomeBack')}</h1>
-            <p className="text-sm text-page-secondary">
+        <div className="auth-card glass rounded-xl p-6 sm:p-8">
+          <div className="mb-8 text-center">
+            {site?.name && <p className="mb-2 truncate text-xs font-bold uppercase tracking-[0.14em] text-page-link">{site.name}</p>}
+            <h1 className="mb-2 text-2xl font-heading font-bold text-page">{t('login.welcomeBack')}</h1>
+            <p className="break-words text-sm text-page-secondary">
               {site?.name ? t('login.signInTo', { name: site.name }) : t('login.signInToDefault')}
             </p>
           </div>
@@ -80,9 +102,15 @@ export default function Login() {
               />
             </div>
 
+            <LegalAgreementCheckbox
+              id="dist-login-agreement"
+              checked={agreedToTerms}
+              onChange={(e) => setAgreedToTerms(e.target.checked)}
+            />
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !agreedToTerms}
               className="btn-primary w-full flex items-center justify-center gap-2"
             >
               {loading && (
@@ -91,6 +119,8 @@ export default function Login() {
               {loading ? t('login.signingIn') : t('login.signInBtn')}
             </button>
           </form>
+
+          <OAuthLoginButtons agreedToTerms={agreedToTerms} disabled={loading} />
 
           <div className="mt-6 text-center">
             <p className="text-sm text-page-secondary">

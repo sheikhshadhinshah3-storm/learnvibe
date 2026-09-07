@@ -16,21 +16,35 @@ const resetLabelKeys = {
   monthly: 'packages.resetMonthly',
 };
 
+const ACTIVE_SUBS_PAGE_SIZE = 5;
+
 function formatDate(unix) {
-  if (!unix) return '';
-  return new Date(unix * 1000).toLocaleDateString();
+  const timestamp = Number(unix || 0);
+  if (!timestamp) return '';
+
+  const date = new Date(timestamp * 1000);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const pad = (value) => String(value).padStart(2, '0');
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join('-') + ` ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 export default function Packages() {
   const { t } = useTranslation();
   const { user, refreshUser } = useAuth();
   const navigate = useNavigate();
-  const { symbol, rate, fmtCNY } = useCurrency();
+  const { symbol, rate, fmtCNY, usdRate } = useCurrency();
   const [packages, setPackages] = useState([]);
   const [models, setModels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [subscribing, setSubscribing] = useState(null);
   const [activeSubs, setActiveSubs] = useState([]);
+  const [activeSubsTotal, setActiveSubsTotal] = useState(0);
+  const [activeSubsPage, setActiveSubsPage] = useState(1);
 
   const [confirmPkg, setConfirmPkg] = useState(null);
 
@@ -43,14 +57,45 @@ export default function Packages() {
     ]).finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    setActiveSubsPage(1);
+  }, [user?.id]);
+
   // Load active subscriptions
   useEffect(() => {
-    if (user) {
-      getActiveSubscriptions()
-        .then((r) => { if (r.data.success) setActiveSubs(r.data.data || []); })
-        .catch(() => {});
+    let cancelled = false;
+
+    if (!user) {
+      setActiveSubs([]);
+      setActiveSubsTotal(0);
+      return () => {
+        cancelled = true;
+      };
     }
-  }, [user]);
+
+    getActiveSubscriptions({
+      params: {
+        page: activeSubsPage,
+        page_size: ACTIVE_SUBS_PAGE_SIZE,
+      },
+    })
+      .then((r) => {
+        if (cancelled || !r.data.success) return;
+        const total = Number(r.data.total ?? (r.data.data || []).length);
+        const totalPages = Math.max(1, Math.ceil(total / ACTIVE_SUBS_PAGE_SIZE));
+        if (total > 0 && activeSubsPage > totalPages) {
+          setActiveSubsPage(totalPages);
+          return;
+        }
+        setActiveSubs(r.data.data || []);
+        setActiveSubsTotal(total);
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, activeSubsPage]);
 
   const handleSubscribe = async (pkg) => {
     if (!user) {
@@ -73,9 +118,15 @@ export default function Packages() {
         await refreshUser({ skipErrorHandler: true }).catch(() => null);
         const subsRes = await getActiveSubscriptions({
           skipErrorHandler: true,
+          params: {
+            page: 1,
+            page_size: ACTIVE_SUBS_PAGE_SIZE,
+          },
         }).catch(() => null);
         if (subsRes?.data?.success) {
+          setActiveSubsPage(1);
           setActiveSubs(subsRes.data.data || []);
+          setActiveSubsTotal(Number(subsRes.data.total ?? (subsRes.data.data || []).length));
         }
       } else {
         toast.error(res.data.message || t('common.requestFailed'));
@@ -88,6 +139,7 @@ export default function Packages() {
 
   // Precompute official equivalents for each package
   const enabledModels = useMemo(() => models.filter((m) => m.enabled !== false), [models]);
+  const activeSubsTotalPages = Math.max(1, Math.ceil(activeSubsTotal / ACTIVE_SUBS_PAGE_SIZE));
 
   if (loading) {
     return (
@@ -126,7 +178,7 @@ export default function Packages() {
               const total = sub.amount_total || 0;
               const used = sub.amount_used || 0;
               const remain = Math.max(0, total - used);
-              const pct = total > 0 ? Math.min(100, (used / total) * 100) : 0;
+              const pct = total > 0 ? Math.max(0, Math.min(100, (used / total) * 100)) : 0;
               return (
                 <div key={sub.id} className="glass rounded-xl p-4 border border-page-divider">
                   <div className="flex items-center justify-between mb-2">
@@ -156,6 +208,29 @@ export default function Packages() {
               );
             })}
           </div>
+          {activeSubsTotalPages > 1 && (
+            <div className="mt-4 flex items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => setActiveSubsPage((page) => Math.max(1, page - 1))}
+                disabled={activeSubsPage <= 1}
+                className="btn-secondary px-3 py-1.5 text-sm disabled:opacity-30"
+              >
+                {t('packages.prevPage')}
+              </button>
+              <span className="rounded-lg border border-page-divider bg-page-surface px-3 py-1.5 text-sm text-page-secondary">
+                {t('packages.pageStatus', { page: activeSubsPage, total: activeSubsTotalPages })}
+              </span>
+              <button
+                type="button"
+                onClick={() => setActiveSubsPage((page) => Math.min(activeSubsTotalPages, page + 1))}
+                disabled={activeSubsPage >= activeSubsTotalPages}
+                className="btn-secondary px-3 py-1.5 text-sm disabled:opacity-30"
+              >
+                {t('packages.nextPage')}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -282,14 +357,18 @@ export default function Packages() {
 
       {/* Confirmation Modal */}
       {confirmPkg && (() => {
-        const userBalance = (user?.quota || 0) / Q * rate;
+        const userQuota = Number(user?.quota || 0);
+        const userBalance = userQuota / Q * rate;
         const pkgPrice = Number(confirmPkg.price);
-        const insufficient = userBalance < pkgPrice;
+        // Package prices are stored in CNY, while user quota is stored in USD units.
+        // Compare quota integers so changing the display currency cannot affect eligibility.
+        const pkgQuotaCost = Math.trunc((pkgPrice / usdRate) * Q);
+        const insufficient = userQuota < pkgQuotaCost;
         const resetPeriod = confirmPkg.quota_reset_period || 'never';
         const isSubscription = resetPeriod !== 'never';
         return (
-        <div className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => !subscribing && setConfirmPkg(null)}>
-          <div className="glass rounded-2xl p-6 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => !subscribing && setConfirmPkg(null)}>
+          <div className="glass max-h-[calc(100dvh-2rem)] w-full max-w-sm overflow-y-auto rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-semibold text-page mb-3">{t('packages.confirmTitle')}</h2>
             <p className="text-sm text-page-secondary mb-2">
               {t('packages.confirmDesc', { name: confirmPkg.name, price: fmtCNY(pkgPrice) })}

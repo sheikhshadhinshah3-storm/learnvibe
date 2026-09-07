@@ -3,10 +3,15 @@ import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { getTokenSupportedModels } from '../api';
 import { useSite } from '../context/SiteContext';
+import {
+  CCSWITCH_PRIMARY_DOWNLOAD,
+  CCSWITCH_REPO_URL,
+} from '../constants/downloads';
+import { SHARED_API_ENDPOINTS } from '../constants/apiEndpoints';
 
 const TOOLS = [
   { id: 'claudecode', name: 'Claude Code', path: '~/.claude/settings.json' },
-  { id: 'hermes', name: 'Hermes', path: 'hermes-subrouter.sh' },
+  { id: 'hermes', name: 'Hermes', path: 'hermes-profile.sh' },
   { id: 'openclaw', name: 'OpenClaw', path: '~/.openclaw/openclaw.json' },
   {
     id: 'opencode',
@@ -26,28 +31,16 @@ const TOOLS = [
 const CCSWITCH_APPS = [
   { id: 'codex', name: 'Codex', endpointType: 'openai' },
   { id: 'claude', name: 'Claude Code', endpointType: 'anthropic' },
+  { id: 'gemini', name: 'Gemini CLI', endpointType: 'gemini' },
   { id: 'opencode', name: 'OpenCode', endpointType: 'openai' },
   { id: 'openclaw', name: 'OpenClaw', endpointType: 'openclaw' },
+  { id: 'hermes', name: 'Hermes', endpointType: 'hermes' },
 ];
 
-const API_ENDPOINTS = [
-  {
-    id: 'china',
-    url: 'https://china.claudecoder.me',
-    nameKey: 'config.apiEndpointChinaName',
-    descKey: 'config.apiEndpointChinaDesc',
-  },
-  {
-    id: 'world',
-    url: 'https://world.claudecoder.me',
-    nameKey: 'config.apiEndpointWorldName',
-    descKey: 'config.apiEndpointWorldDesc',
-  },
-];
+const API_ENDPOINTS = SHARED_API_ENDPOINTS;
 
-const CCSWITCH_RELEASE_URL =
-  'https://github.com/farion1231/cc-switch/releases/latest';
-const CCSWITCH_REPO_URL = 'https://github.com/farion1231/cc-switch';
+const normalizeServerAddress = (serverAddress = '') =>
+  String(serverAddress || '').replace(/\/+$/, '');
 
 function ThemedSelect({
   value,
@@ -198,12 +191,13 @@ const ConfigExporter = ({ tokens = [] }) => {
   const [selectedModel, setSelectedModel] = useState('');
   const [selectedTool, setSelectedTool] = useState('claudecode');
   const [selectedCCSwitchApp, setSelectedCCSwitchApp] = useState('codex');
-  const [selectedEndpointId, setSelectedEndpointId] = useState('china');
+  const [selectedEndpointId, setSelectedEndpointId] = useState('overseas-direct');
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelsError, setModelsError] = useState(false);
   const [copied, setCopied] = useState(false);
   const [launchingCCSwitch, setLaunchingCCSwitch] = useState(false);
   const [showCCSwitchDownload, setShowCCSwitchDownload] = useState(false);
+  const ccSwitchLaunchFallbackMs = 4500;
 
   const serverAddress = window.location.origin;
   const selectedEndpoint = useMemo(
@@ -212,7 +206,10 @@ const ConfigExporter = ({ tokens = [] }) => {
       API_ENDPOINTS[0],
     [selectedEndpointId],
   );
-  const apiServerAddress = selectedEndpoint.url;
+  const apiServerAddress = useMemo(
+    () => normalizeServerAddress(selectedEndpoint.url),
+    [selectedEndpoint.url],
+  );
 
   const selectedToken = useMemo(
     () => tokens.find((token) => token.id === selectedTokenId) || null,
@@ -306,7 +303,7 @@ const ConfigExporter = ({ tokens = [] }) => {
         family: 'anthropic',
         baseUrl: apiServerAddress,
         openclawApi: 'anthropic-messages',
-        openclawProviderId: 'subrouter-anthropic',
+        openclawProviderId: 'anthropic-compatible',
         opencodeProviderId: 'anthropic',
       };
     }
@@ -314,36 +311,162 @@ const ConfigExporter = ({ tokens = [] }) => {
       family: 'openai',
       baseUrl: `${apiServerAddress}/v1`,
       openclawApi: 'openai-completions',
-      openclawProviderId: 'subrouter-openai',
+      openclawProviderId: 'openai',
       opencodeProviderId: 'openai',
     };
   };
 
   const getCCSwitchEndpoint = () => {
     const app = CCSWITCH_APPS.find((item) => item.id === selectedCCSwitchApp);
-    const preset = getModelConnectionPreset(selectedModel);
     if (app?.endpointType === 'anthropic') {
       return apiServerAddress;
     }
-    if (app?.id === 'openclaw' || app?.id === 'opencode') {
-      return preset.baseUrl;
+    if (app?.endpointType === 'gemini') {
+      return `${apiServerAddress}/v1beta`;
     }
     return `${apiServerAddress}/v1`;
   };
 
+  const encodeBase64Utf8 = (value) => {
+    const bytes = new TextEncoder().encode(value);
+    let binary = '';
+    bytes.forEach((byte) => {
+      binary += String.fromCharCode(byte);
+    });
+    return btoa(binary);
+  };
+
+  const sanitizeProviderId = (name = '') => {
+    const sanitized = name
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '_')
+      .replace(/^_+|_+$/g, '');
+    return sanitized || 'api_provider';
+  };
+
+  const buildCCSwitchConfigPayload = ({
+    appId,
+    providerName,
+    endpoint,
+    apiKey,
+    modelName,
+  }) => {
+    switch (appId) {
+      case 'claude':
+        return {
+          env: {
+            ANTHROPIC_AUTH_TOKEN: apiKey,
+            ANTHROPIC_BASE_URL: endpoint,
+            ANTHROPIC_MODEL: modelName,
+            ANTHROPIC_DEFAULT_HAIKU_MODEL: modelName,
+            ANTHROPIC_DEFAULT_SONNET_MODEL: modelName,
+            ANTHROPIC_DEFAULT_OPUS_MODEL: modelName,
+          },
+        };
+
+      case 'codex': {
+        const providerId = sanitizeProviderId(providerName);
+        return {
+          auth: {
+            OPENAI_API_KEY: apiKey,
+          },
+          config: `model_provider = "${providerId}"
+model = "${modelName}"
+model_reasoning_effort = "high"
+disable_response_storage = true
+
+[model_providers.${providerId}]
+name = "${providerId}"
+base_url = "${endpoint}"
+wire_api = "responses"
+requires_openai_auth = true
+`,
+        };
+      }
+
+      case 'gemini':
+        return {
+          GEMINI_API_KEY: apiKey,
+          GOOGLE_GEMINI_BASE_URL: endpoint,
+          GEMINI_MODEL: modelName,
+        };
+
+      case 'opencode':
+        return {
+          npm: '@ai-sdk/openai-compatible',
+          options: {
+            baseURL: endpoint,
+            apiKey,
+          },
+          models: {
+            [modelName]: {
+              name: modelName,
+              options: {
+                store: false,
+              },
+            },
+          },
+        };
+
+      case 'openclaw':
+        return {
+          baseUrl: endpoint,
+          apiKey,
+          api: 'openai-completions',
+          models: [
+            {
+              id: modelName,
+              name: modelName,
+            },
+          ],
+        };
+
+      case 'hermes':
+        return {
+          name: providerName,
+          base_url: endpoint,
+          api_key: apiKey,
+          api_mode: 'chat_completions',
+          models: [
+            {
+              id: modelName,
+              name: modelName,
+            },
+          ],
+        };
+
+      default:
+        return null;
+    }
+  };
+
   const generateCCSwitchLink = () => {
     if (!selectedToken || !selectedModel) return '';
+    const providerName = site?.name || window.location.hostname;
+    const apiKey = `sk-${selectedToken.key}`;
+    const endpoint = getCCSwitchEndpoint();
+    const configPayload = buildCCSwitchConfigPayload({
+      appId: selectedCCSwitchApp,
+      providerName,
+      endpoint,
+      apiKey,
+      modelName: selectedModel,
+    });
     const params = new URLSearchParams({
       resource: 'provider',
       app: selectedCCSwitchApp,
-      name: site?.name || window.location.hostname,
+      name: providerName,
       homepage: serverAddress,
-      endpoint: getCCSwitchEndpoint(),
-      apiKey: `sk-${selectedToken.key}`,
+      endpoint,
+      apiKey,
       model: selectedModel,
       enabled: 'true',
-      notes: `${site?.name || window.location.hostname} · ${selectedModel}`,
+      notes: `${providerName} - ${selectedModel}`,
     });
+    if (configPayload) {
+      params.set('configFormat', 'json');
+      params.set('config', encodeBase64Utf8(JSON.stringify(configPayload)));
+    }
     return `ccswitch://v1/import?${params.toString()}`;
   };
 
@@ -351,6 +474,7 @@ const ConfigExporter = ({ tokens = [] }) => {
     if (!selectedToken || !selectedModel) return '';
 
     const apiKey = `sk-${selectedToken.key}`;
+    const hermesProfileName = sanitizeProviderId(site?.name || window.location.hostname);
 
     switch (selectedTool) {
       case 'claudecode':
@@ -366,9 +490,9 @@ const ConfigExporter = ({ tokens = [] }) => {
 set -euo pipefail
 
 # Hermes uses profiles for isolated config, API keys, memory, and sessions.
-# This creates/updates a SubRouter profile and exports it as a tar.gz archive.
+# This creates/updates a dedicated API profile and exports it as a tar.gz archive.
 
-PROFILE_NAME="subrouter"
+PROFILE_NAME="${hermesProfileName}"
 PROFILE_DIR="$HOME/.hermes/profiles/$PROFILE_NAME"
 
 if ! hermes profile show "$PROFILE_NAME" >/dev/null 2>&1; then
@@ -505,7 +629,7 @@ print(message.content[0].text)`;
       case 'curl':
         return 'api-call.sh';
       case 'hermes':
-        return 'hermes-subrouter.sh';
+        return 'hermes-profile.sh';
       case 'python':
       case 'anthropic':
         return 'main.py';
@@ -593,6 +717,7 @@ print(message.content[0].text)`;
 
     const cleanup = () => {
       window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('pagehide', handlePageHide);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (timerId) {
         window.clearTimeout(timerId);
@@ -610,6 +735,10 @@ print(message.content[0].text)`;
       handleSuccess();
     };
 
+    const handlePageHide = () => {
+      handleSuccess();
+    };
+
     const handleVisibilityChange = () => {
       if (document.hidden) {
         handleSuccess();
@@ -617,6 +746,7 @@ print(message.content[0].text)`;
     };
 
     window.addEventListener('blur', handleBlur);
+    window.addEventListener('pagehide', handlePageHide);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     timerId = window.setTimeout(() => {
@@ -624,7 +754,7 @@ print(message.content[0].text)`;
       cleanup();
       setLaunchingCCSwitch(false);
       setShowCCSwitchDownload(true);
-    }, 1500);
+    }, ccSwitchLaunchFallbackMs);
 
     window.location.href = deeplink;
   };
@@ -1022,11 +1152,11 @@ print(message.content[0].text)`;
 
       {showCCSwitchDownload && (
         <div
-          className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          className="modal-overlay fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
           onClick={() => setShowCCSwitchDownload(false)}
         >
           <div
-            className="glass rounded-2xl p-6 w-full max-w-md"
+            className="glass max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-lg font-semibold text-page mb-2">
@@ -1037,9 +1167,7 @@ print(message.content[0].text)`;
             </p>
             <div className="space-y-3">
               <a
-                href={CCSWITCH_RELEASE_URL}
-                target="_blank"
-                rel="noreferrer"
+                href={CCSWITCH_PRIMARY_DOWNLOAD}
                 className="btn-primary w-full text-center block"
               >
                 {t('config.downloadCCSwitch')}

@@ -3,12 +3,8 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   ArrowRight,
-  CheckCircle2,
   Cpu,
   Gauge,
-  KeyRound,
-  Layers3,
-  Route,
   ShieldCheck,
   Sparkles,
   WalletCards,
@@ -17,8 +13,8 @@ import { useAuth } from '../../context/AuthContext';
 import { useSite, useCurrency } from '../../context/SiteContext';
 import { calcOfficialEquivList } from '../../utils/officialEquiv';
 import { packageQuotaDollars, useHomeData } from '../shared/useHomeData';
+import { PUBLIC_API_ENDPOINT_COUNT } from '../../constants/apiEndpoints';
 import Aurora from '../../components/bits/Aurora';
-import CountUp from '../../components/bits/CountUp';
 import FadeContent from '../../components/bits/FadeContent';
 import RotatingEquiv from '../../components/bits/RotatingEquiv';
 import ApiEndpoints from '../../components/ApiEndpoints';
@@ -52,15 +48,15 @@ export default function AuroraHome() {
         <div className="relative mx-auto grid min-h-[calc(100vh-4rem)] max-w-7xl gap-12 px-4 pb-16 pt-14 sm:px-6 lg:grid-cols-[0.92fr_1.08fr] lg:items-center lg:pb-20 lg:pt-20">
           <FadeContent blur duration={700} delay={80}>
             <div className="max-w-2xl">
-              <div className="mb-5 inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white/90 px-3 py-1.5 text-sm font-bold text-slate-600 shadow-sm">
+              <div className="mb-5 inline-flex max-w-full items-center gap-2 rounded-lg border border-slate-200 bg-white/90 px-3 py-1.5 text-sm font-bold text-slate-600 shadow-sm">
                 <Sparkles className="h-4 w-4 text-teal-600" />
-                {homeContent.heroTagline}
+                <span className="min-w-0 break-words">{homeContent.heroTagline}</span>
               </div>
 
-              <h1 className="max-w-2xl text-4xl font-black tracking-tight text-slate-950 sm:text-5xl lg:text-6xl">
+              <h1 className="max-w-2xl break-words text-4xl font-black tracking-tight text-slate-950 sm:text-5xl lg:text-6xl">
                 {site?.name || t('home.defaultHeroTitle')}
               </h1>
-              <p className="mt-6 max-w-xl text-base leading-8 text-slate-600 sm:text-lg">
+              <p className="mt-6 max-w-xl break-words text-base leading-8 text-slate-600 sm:text-lg">
                 {homeContent.heroSubtitle}
               </p>
 
@@ -76,10 +72,10 @@ export default function AuroraHome() {
                 </Link>
               </div>
 
-              <div className="mt-10 grid max-w-xl grid-cols-3 gap-3">
-                <Metric value={enabledModels.length || 50} suffix="+" label={t('home.aiModels')} />
-                <Metric value={99.9} suffix="%" label={t('home.uptime')} />
-                <Metric value={50} prefix="<" suffix="ms" label={t('home.latency')} />
+              <div className="mt-10 flex max-w-xl flex-wrap gap-x-7 gap-y-3 border-t border-slate-300 pt-5">
+                <HeroFact value={enabledModels.length} label={t('home.aiModels')} />
+                <HeroFact value={visiblePackages.length} label={t('home.plansPackages')} />
+                <HeroFact value={PUBLIC_API_ENDPOINT_COUNT} label={t('home.apiEndpointsTitle')} />
               </div>
             </div>
           </FadeContent>
@@ -88,13 +84,13 @@ export default function AuroraHome() {
             {homeContent.heroImage ? (
               <HomeHeroImage src={homeContent.heroImage} alt={site?.name} className="aspect-[4/3]" />
             ) : (
-              <RoutingWorkbench models={models} t={t} />
+              <AuroraModelCatalog models={enabledModels} t={t} />
             )}
           </FadeContent>
         </div>
       </section>
 
-      <ApiEndpoints />
+      <ApiEndpoints variant="aurora" />
 
       <section className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:py-20">
         <SectionTitle title={t('home.whyChooseUs')} desc={t('home.whyChooseUsDesc')} />
@@ -128,7 +124,7 @@ export default function AuroraHome() {
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {models.map((model, index) => (
-                <ModelTile key={model.id || index} model={model} index={index} />
+                <ModelTile key={model.id || index} model={model} index={index} t={t} />
               ))}
             </div>
           </div>
@@ -175,11 +171,11 @@ function PrimaryLink({ to, children, light = false }) {
   );
 }
 
-function Metric({ value, label, prefix = '', suffix = '' }) {
+function HeroFact({ value, label }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white/95 p-4 shadow-sm">
-      <div className="text-xl font-black text-slate-950">{prefix}<CountUp from={0} to={value} duration={2} />{suffix}</div>
-      <p className="mt-1 truncate text-xs font-semibold text-slate-500">{label}</p>
+    <div className="flex items-baseline gap-2">
+      <span className="text-lg font-black text-slate-950">{value}</span>
+      <span className="text-xs font-semibold text-slate-500">{label}</span>
     </div>
   );
 }
@@ -193,122 +189,51 @@ function SectionTitle({ title, desc, compact = false }) {
   );
 }
 
-function RoutingWorkbench({ models, t }) {
-  const preview = models.length ? models : [
-    { display_name: 'gpt-4o-mini' },
-    { display_name: 'claude-sonnet' },
-    { display_name: 'gemini-pro' },
-    { display_name: 'deepseek-chat' },
-  ];
-  const rows = [
-    { label: 'latency', value: '42ms', tone: 'text-blue-200' },
-    { label: 'fallback', value: 'armed', tone: 'text-teal-200' },
-    { label: 'providers', value: `${preview.length}+`, tone: 'text-slate-100' },
-  ];
-
+function AuroraModelCatalog({ models, t }) {
+  const preview = models.slice(0, 6);
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_28px_80px_rgba(15,23,42,0.14)]">
-      <div className="rounded-xl border border-slate-200 bg-slate-950 p-4 text-white">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-slate-950">
-              <Route className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-sm font-black">Routing Workbench</p>
-              <p className="mt-1 text-xs font-medium text-slate-400">live model orchestration</p>
-            </div>
-          </div>
-          <span className="w-fit rounded-md bg-teal-400/15 px-2.5 py-1 text-xs font-black text-teal-200 ring-1 ring-teal-300/20">HEALTHY</span>
+    <div className="mx-auto w-full max-w-xl rounded-xl border border-slate-200 bg-white/88 p-6 shadow-[0_24px_70px_rgba(15,23,42,0.1)] backdrop-blur-xl sm:p-7">
+      <div className="flex items-start justify-between gap-5">
+        <div>
+          <p className="text-lg font-black text-slate-950">{t('home.availableModels')}</p>
+          <p className="mt-1 max-w-md text-sm leading-6 text-slate-600">
+            {t('home.availableModelsDesc', { count: models.length })}
+          </p>
         </div>
-
-        <div className="mt-5 grid gap-3 sm:grid-cols-3">
-          {rows.map((item) => (
-            <div key={item.label} className="rounded-lg border border-white/10 bg-white/[0.06] p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{item.label}</p>
-              <p className={`mt-1 font-mono text-sm font-black ${item.tone}`}>{item.value}</p>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-5 rounded-xl border border-white/10 bg-[#070b12] p-4">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-sm font-bold text-slate-100">
-              <Layers3 className="h-4 w-4 text-blue-300" />
-              route decision
-            </div>
-            <span className="font-mono text-xs text-slate-500">POST /v1/chat</span>
-          </div>
-
-          <div className="space-y-3">
-            {preview.slice(0, 4).map((model, index) => (
-              <RouteRow
-                key={model.id || index}
-                model={model}
-                index={index}
-                active={index === 0}
-              />
-            ))}
-          </div>
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-950 text-white">
+          <Cpu className="h-5 w-5" />
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-[1.1fr_0.9fr]">
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <div className="mb-3 flex items-center gap-2 text-sm font-bold text-slate-950">
-            <KeyRound className="h-4 w-4 text-teal-700" />
-            {t('home.availableModels')}
+      <div className="mt-6 grid gap-x-5 sm:grid-cols-2">
+        {preview.map((model, index) => (
+          <div key={model.id || index} className="flex min-w-0 items-center gap-3 border-t border-slate-200 py-3">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-teal-600" />
+            <span className="min-w-0 truncate font-mono text-sm font-semibold text-slate-800">
+              {model.display_name || model.model_name}
+            </span>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {preview.slice(0, 4).map((model, index) => (
-              <div key={model.id || index} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                <span className="truncate font-mono text-xs font-semibold text-slate-700">{model.display_name || model.model_name}</span>
-                <CheckCircle2 className="h-4 w-4 shrink-0 text-teal-600" />
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">policy</p>
-          <p className="mt-2 text-sm font-black text-slate-950">best price + low latency</p>
-          <p className="mt-2 text-xs leading-5 text-slate-500">fallback enabled across healthy providers</p>
-        </div>
+        ))}
       </div>
-    </div>
-  );
-}
 
-function RouteRow({ model, index, active }) {
-  const width = ['82%', '64%', '52%', '38%'][index] || '44%';
-  return (
-    <div className={`rounded-lg border p-3 ${active ? 'border-blue-400/40 bg-blue-400/10' : 'border-white/10 bg-white/[0.035]'}`}>
-      <div className="flex items-center justify-between gap-3">
-        <span className="truncate font-mono text-xs font-semibold text-slate-200">{model.display_name || model.model_name}</span>
-        <span className={active ? 'text-xs font-black text-blue-200' : 'text-xs font-semibold text-slate-500'}>
-          {active ? 'PRIMARY' : `R${index + 1}`}
-        </span>
-      </div>
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
-        <div className="h-full rounded-full bg-gradient-to-r from-blue-400 to-teal-300" style={{ width }} />
-      </div>
+      <Link to="/pricing" className="mt-5 inline-flex items-center gap-2 text-sm font-black text-blue-700 hover:text-slate-950">
+        {t('home.viewAllModels', { count: models.length })}
+        <ArrowRight className="h-4 w-4" />
+      </Link>
     </div>
   );
 }
 
 function ModelTile({ model, index }) {
-  const active = index % 3 === 0;
   return (
-    <div className="group rounded-xl border border-slate-200 bg-slate-50 p-4 transition-colors hover:border-blue-200 hover:bg-white">
-      <div className="mb-4 flex items-center justify-between">
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-blue-700 ring-1 ring-slate-200">
-          <Cpu className="h-4 w-4" />
-        </div>
-        <span className={`rounded-md px-2 py-1 text-xs font-bold ${active ? 'bg-blue-50 text-blue-700' : 'bg-teal-50 text-teal-700'}`}>
-          {active ? 'PRIMARY' : 'ONLINE'}
-        </span>
+    <div className="group flex min-w-0 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 transition-colors hover:border-blue-200 hover:bg-white">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white text-blue-700 ring-1 ring-slate-200">
+        <Cpu className="h-4 w-4" />
       </div>
-      <p className="truncate font-mono text-sm font-semibold text-slate-900">{model.display_name || model.model_name}</p>
-      <p className="mt-2 text-xs font-semibold text-slate-500">balanced route pool</p>
+      <div className="min-w-0">
+        <p className="truncate font-mono text-sm font-semibold text-slate-900">{model.display_name || model.model_name}</p>
+        <p className="mt-1 text-xs font-medium text-slate-500">{String(index + 1).padStart(2, '0')}</p>
+      </div>
     </div>
   );
 }
